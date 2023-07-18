@@ -1,1 +1,8 @@
 .DS_Store
+.Rproj.user/*
+.Rhistory
+query-InfluxDB.R
+.vscode/*
+scripts_functions_report_edited.R
+*.csv
+*.RData

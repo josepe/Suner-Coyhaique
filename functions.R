@@ -1,6 +1,15 @@
-# _____________________________________________________________
-# Query (función) ----
+# query_influxDB_columnar() is a function that queries the autos database in an InfluxDB connection and returns the data as a data frame. The query is specified by the select and where arguments, and the data is limited by the limit argument. The vehiculo argument specifies the measurement to be queried. The con argument specifies the InfluxDB connection. The returned data frame excludes columns statement_id, series_names, series_tags, and series_partial.
+# fetch_telemetry() is a function that fetches telemetry data from an InfluxDB database. It takes in a connection (con), a list of vehicles (vehiculos_list), the variable of telemetry to fetch (var_telemetria), a query string (querystr), and a time zone (time_zone). It creates a query out of the query string and variable of telemetry, then iterates through the list of vehicles to query the InfluxDB database for the corresponding data. It then binds the results from each query together and sets the "time" column to the specified time zone. Finally, it returns the combined dataset.
 
+# detect_peaks() is a function that takes a series of data points as input and uses the loess and frollapply functions to smooth the data and detect peaks and valleys. It then creates a data frame with the results and returns two elements: "smooth" which contains the smoothed data, and "peaks" which contains the detected peaks and valleys.
+# detect_peaks_score() is a function that uses a score function to detect peaks in a series of data points. The score function is a custom function that is passed as an argument to the function. The function then returns a data frame with the detected peaks and valleys.
+# cast_ts() is a function that converts a time series to a data frame with interpolated values. The function takes in a time series data frame and the variable of telemetry to cast (telem). It then creates a new data frame with the time and telemetry variable as the first two columns, and the remaining columns are interpolated values of the telemetry variable.
+# join_cast_ts() is a function that joins two cast time series data frames. The function takes in two cast time series data frames and the variable of telemetry to join (telem). It then creates a new data frame that contains the joined data from the two input data frames.
+# extract_continuous() is a function that extracts continuous segments from a time series. The function takes in a time series data frame and a window size (w). It then iterates through the time series and identifies segments of length w that are consecutive and non-overlapping. The function then returns a data frame that contains the start and end times of each segment.
+# extrae_carga_descarga() is a function that extracts charge and discharge segments from a time series. The function takes in a time series data frame and a window size (w). It then identifies segments of the time series where the energy is increasing (charge) and segments where the energy is decreasing (discharge). The function then returns a data frame that contains the start and end times of each segment, as well as the type of segment (charge or discharge).
+
+
+### QUERY INFLLUXDB ###############################
 # This function queries the 'autos' database in an InfluxDB connection
 # and returns the data as a data frame. The query is specified by the
 # 'select' and 'where' arguments, and the data is limited by the
@@ -38,9 +47,8 @@ query_influxDB_columnar <-
         ) := NULL)
   }
 
-# ____________________________________________________________
-# Fetch telemetry ----
 
+### FETCH TELEMETRY ###############################
 # This function fetches telemetry data from an InfluxDB database. It
 # takes in a connection (con), a list of vehicles (vehiculos_list),
 # the variable of telemetry to fetch (var_telemetria), a query string
@@ -56,7 +64,6 @@ fetch_telemetry <- function(con,
   var_telemetria,
   querystr,
   time_zone) {
-  
   query <- querystr[[var_telemetria]]
   y_list <- vehiculos_list |>
     map(\(x)
@@ -75,17 +82,125 @@ fetch_telemetry <- function(con,
   return(y_dt)
 }
 
-# _____________________________________________________________
-# Detect peaks ----
 
-#______________________________________________________________
-# Método de detección de peaks loess y froll min , max
 
-#This function takes a series of data points as input and uses the
-#loess and frollapply functions to smooth the data and detect peaks
-#and valleys. It then creates a data frame with the results and
-#returns two elements: "smooth" which contains the smoothed data, and
-#"peaks" which contains the detected peaks and valleys.
+
+
+### READ_AND_CONVERT CSV FILES WITH TIME DIMENSION TO DATA TABLE  ###############################
+# This function reads a CSV file into a data.table, converts the timezone of the 'time' column, 
+# and optionally rounds the time points and merges the data.table with a provided base table.
+# 
+# Arguments:
+# file: The path to the CSV file to be read.
+# tbase: An optional base data.table that has a 'time' column. If provided, the function will round the time points in the input data.table to the minimum time difference in 'tbase', and then perform a left join with 'tbase' based on the 'time' column.
+# timezone: The timezone to convert the 'time' column to. Default is "America/Santiago".
+# 
+# Returns:
+# The resulting data.table after timezone conversion, and optional time rounding and merging with 'tbase'.
+
+read_and_convert_time <- function(file, tbase = NULL, timezone = "America/Santiago") {
+  
+  # Read the file into a data.table
+  df <- fread(file)
+  
+  # Convert the time column to the specified timezone
+  df[, time := with_tz(time, tzone = timezone)]
+  
+  # If 'tbase' is provided...
+  if (!is.null(tbase)) {
+    # Calculate the minimum time difference in 'tbase'
+    diff_unit <- get_min_time_difference(tbase)
+    
+    # Round the time points in the input data.table to the nearest time unit
+    df[, time := round_date(time, unit = diff_unit)]
+    
+    # Perform a left join with 'tbase' based on the 'time' column
+    df <- df[tbase, on = .(time), nomatch = NA]
+  }
+  
+  # Return the resulting data.table
+  return(df)
+}
+
+### CREATE TIMEBASE FUNCTION ###############################
+### GET_MIN_TIME_DIFFERENCE   ###############################
+# This function takes a data frame (or data.table) and the name of a time column as input.
+# It calculates the differences between all consecutive timestamps in the specified column.
+# Any differences that are zero (which may occur if there are duplicate timestamps) are removed.
+# The function then finds the smallest non-zero difference and converts it to the appropriate units.
+# The default unit is minutes, but this can be changed by modifying the 'units' argument in the as.numeric() function.
+# The function returns this smallest difference as a string in the format "X mins".
+#
+# Arguments:
+#   time_data: A data frame (or data.table) that contains a column of timestamps.
+#   time_column: The name of the column in 'time_data' that contains the timestamps. Default is "time".
+#
+# Returns: 
+#   A string in the format "X mins", where X is the smallest non-zero difference between consecutive timestamps.
+
+
+get_min_time_difference <-
+  function(time_data,
+    time_column = "time",
+    units = "mins") {
+    # Calculate the differences between all times
+    time_differences <- diff(time_data[[time_column]])
+    
+    # Remove differences that are zero
+    time_differences <- time_differences[time_differences != 0]
+    
+    # Find the minimum difference
+    min_difference <- min(time_differences, na.rm = TRUE)
+    
+    # Convert to appropriate units
+    min_difference <- as.numeric(min_difference, units = units)
+    
+    # Return as "X mins"
+    return(paste(min_difference, units))
+  }
+
+
+# This function creates a time base data.table with a 'time' column ranging from the start 
+# to the end of a given period, with the specified time unit and timezone.
+#
+# Arguments:
+# periodo: The period to create the time base for.
+# time_unit: The unit of time for the time steps.
+# timezone: The timezone to set for the 'time' column.
+#
+# Returns:
+# A data.table with a 'time' column that ranges from the start to the end of 'periodo', with steps of 'time_unit' and in the 'timezone' timezone.
+
+create_timebase <- function(periodo, time_unit = "1 mins", timezone = "America/Santiago") {
+  # Create a sequence from the start to the end of 'periodo' with steps of 'time_unit'
+  tbase <- seq(lubridate::int_start(periodo), lubridate::int_end(periodo), by = time_unit) |>
+    # Convert the sequence to a data.table
+    data.table::as.data.table() |>
+    # Rename the first column to 'time'
+    data.table::setnames(1, "time")
+  
+  # Add an 'ind' column that indicates the row index
+  tbase[, ind := .I]
+  
+  # Round the 'time' points to the nearest 'time_unit'
+  tbase[, time := lubridate::round_date(time, unit = time_unit)] |>
+    # Set 'time' as the key column for fast subset and join operations
+    data.table::setkey(time)
+  
+  # Change the timezone of the 'time' column to 'timezone'
+  tbase[, time := lubridate::with_tz(time, tzone = timezone)]
+  
+  return(tbase)
+}
+
+
+
+### DETECT PEAKS ###############################
+# This function takes a series of data points as input and uses the
+# loess and frollapply functions to smooth the data and detect peaks
+# and valleys. It then creates a data frame with the results and
+# returns two elements: "smooth" which contains the smoothed data, and
+# "peaks" which contains the detected peaks and valleys.
 
 detect_peaks <-
   function(series,...)  {
@@ -175,9 +290,64 @@ detect_peaks <-
     
   }
 
- #______________________________________
- # Índices de peaks
-# function called detect_d, which takes three arguments:
+
+### DETECT PEAKS POR SCORE #######################
+
+detect_peaks_score <- function(series,...) {
+  
+  raw_series <- series[, .(j,
+    vari)]
+  
+  span <- npoints / nrow(series)
+  # paste0("span = ", span) |> print()
+  # paste0("npoints = ", npoints) |> print()
+  
+  y_smoothed_obj <-
+    loess(vari ~ j,
+      data = series,
+      span = span)
+  y_smoothed <-
+    predict(y_smoothed_obj)
+  
+  out1 <- raw_series[, .(j,
+    vari,
+    vari_smooth = y_smoothed)]
+  
+out1[, .(j,vari_smooth = vari_smooth |> na_kalman(model = "auto.arima"))][,
+    vari_smooth_valley := -vari_smooth]
+      peaks_location <- to_peaks[,   detect_d(vari_smooth,w_detect, w_score)]
+  valleys_location <- to_peaks[, detect_d(vari_smooth_valley,w_detect, w_score)]
+
+  boundaries <- rbind(
+    out1[peaks_location, .(j, vari, ext = as.factor("MAX"))],      # peaks
+    out1[valleys_location, .(j, vari, ext = as.factor("MIN"))] )|>  # valleys
+      setkey(j)
+  boundaries[, c("j.next", "ext_next","vari_next") :=
+      lapply(.SD,
+        \(x) (shift(x, type = "lead"))),
+      .SDcols = c("j", "ext","vari")] |>
+    na.omit()
+
+ boundaries[, let(
+    delta_e = fcase(
+    ext == "MAX" & ext_next == "MIN", "descarga",
+    ext == "MIN" & ext_next == "MAX", "carga"
+    ),
+    del_vari = abs(vari-vari_next)   ########### FIX ME (1) ################
+    )]
+ # if(boundaries[del_vari>20]) {browse()}
+
+### avoid "tickmark" effect (use SOC signal instead of energy to detect peaks)
+  boundaries = boundaries |> na.omit()
+  boundaries[, c("vari","vari_next") := NULL]
+    return(list(smooth = out1,
+    peaks = boundaries))
+  }
+
+
+
+### DETECT_D (TEST) ###############################
+# function detect_d,takes three arguments:
 # 
 # x: a numeric vector representing the input signal. w_detect: a
 # scalar value representing the width of the window used for detecting
@@ -206,8 +376,6 @@ detect_peaks <-
 # have a score greater than a threshold value, and returns their
 # indices.
 
-
-
 detect_d <- function(x, w_detect, w_score) {
     local_peaks <- detect_localmaxima(x, w = w_detect)
     score <- score_type2(x, w = w_score)
@@ -215,171 +383,122 @@ detect_d <- function(x, w_detect, w_score) {
     i <- true_peaks |> which()
   }
 
-#_______________________________________
-# Método de detección de peaks por score
+### CAST_TS PREPARE DATA FOR BULK SEGMENT EXTRACTION ###############################
 
-detect_peaks_score <- function(series,...) {
-  
-  raw_series <- series[, .(j,
-    vari)]
-  
-  span <- npoints / nrow(series)
-  paste0("span = ", span) |> print()
-  paste0("npoints = ", npoints) |> print()
-  
-  
-  y_smoothed_obj <-
-    loess(vari ~ j,
-      data = series,``
-      span = span)
-  y_smoothed <-
-    predict(y_smoothed_obj)
-  
-  out1 <- raw_series[, .(j,
-    vari,
-    vari_smooth = y_smoothed)]
-  
-  
-  to_peaks <- out1[, .(j,vari_smooth = vari_smooth |> na_kalman(model = "auto.arima"))][,
-    vari_smooth_valley := -vari_smooth]
-  
-
-  peaks_location <- to_peaks[,   detect_d(vari_smooth,w_detect, w_score)]
-  valleys_location <- to_peaks[, detect_d(vari_smooth_valley,w_detect, w_score)]
-
-  boundaries <- rbind(
-    out1[peaks_location, .(j, vari, ext = as.factor("MAX"))],      # peaks
-    out1[valleys_location, .(j, vari, ext = as.factor("MIN"))] )|>  # valleys
-      setkey(j)       
+cast_ts <-
+  function(x_ts, telem, gap_min) {
+    # series must be regularly sampled
     
-  boundaries[, c("j.next", "ext_next","vari_next") :=
-      lapply(.SD,
-        \(x) (shift(x, type = "lead"))),
-      .SDcols = c("j", "ext","vari")] |>
-    na.omit()
-
- boundaries[, let(
-    delta_e = fcase(
-    ext == "MAX" & ext_next == "MIN", "descarga",
-    ext == "MIN" & ext_next == "MAX", "carga"
-    ),
-    del_vari = abs(vari-vari_next)   ########### FIX ME (1) ################
-    )]
- # if(boundaries[del_vari>20]) {browse()}
- 
-   ### avoid "tickmark" effect (use SOC signal instead of energy to detect peaks)
- 
- 
-  boundaries = boundaries |> na.omit()
-  boundaries[, c("vari","vari_next") := NULL]
-  
-  return(list(smooth = out1,
-    peaks = boundaries))
-  
+    cx_ts <-
+      x_ts |> dcast(time + ind ~ id,
+        value.var = telem,
+        fill = NA) |>
+      DT(, "NA" := NULL) |>
+      setDT()
+    
+    dt_gap <-
+      cx_ts[1:2, time] |>  #  Extracts the time column from the first two rows of cx_ts
+      int_diff() |>  # Calculates the difference between each element of the time vector (i.e. the time gap between row 1 and row 2)
+      int_length()   # Converts the time interval difference into a scalar number representing the length of the interval in seconds.
+    
+    n_points <-
+      # for example, if gap_min=10 and sampling period = 1 min then n_points = 10
+      gap_min / (dt_gap / 60) |> # dt_gap/60 converts gap from seconds to minutes
+      round()
+    
+    cx_ts[,
+      c('coy', 'coy2', 'coy3', 'coy4', 'coy5', 'coy7') :=
+        lapply(.SD[, ], \(x)(na_kalman(x, maxgap = n_points, model = "auto.arima"))),
+      .SDcols = c('coy', 'coy2', 'coy3', 'coy4', 'coy5', 'coy7')] |> setkey(time)
+    
   }
 
+### JOIN_CAST_TS (JOIN DIFFERENT TIME SERIES) ###############################
 
-# _________________________________________________
-# DCAST for segment extraction, NA imputation ----
-
-cast_ts <- function(x_ts, telem, gap_min) {   # series must be regularly sampled (eg 1 min )
-  cx_ts <-
-    x_ts |> dcast(time + ind ~ id,
-      value.var = telem,
-      fill = NA) |>
-    DT(, "NA" := NULL) |>
-    setDT()
-  
-  dt_gap <-  cx_ts[1:2,time] |>  # gaps to fill with kalman smoothing 
-    int_diff() |> 
-    int_length()   # establish difference in seconds (assume regular sampling)
-  
-  n_points <- 
-    gap_min/(dt_gap/60) |> 
-    round() 
-  
-  cx_ts[,
-    c('coy', 'coy2', 'coy3', 'coy4', 'coy5', 'coy7') :=
-      lapply(.SD[,], \(x)(na_kalman(x, maxgap = n_points,model="auto.arima"))),
-    .SDcols = c('coy', 'coy2', 'coy3', 'coy4', 'coy5', 'coy7')] |> setkey(time)
-
-}
-
-# _________________________________________________
-# JOIN cast_ts series for analysis ----
-
+# Function to join and cast two data frames 
 join_cast_ts <- function(cast_x, cast_y, telem) {
  telem_x=telem[1]
  telem_y=telem[2]
+
+# Melt the first data table
   melt_x <- melt.data.table(cast_x,id.vars=c("time","ind"),
     measure.vars= patterns("^coy", cols=names(cast_x)),
     variable.name = "id",
     value.name = telem_x
       ) |> setDT() |> setkey(time,ind,id)
  
+# Melt the second data table
    melt_y <- melt.data.table(cast_y,id.vars=c("time","ind"),
     measure.vars= patterns("^coy", cols=names(cast_y)),
     variable.name = "id",
     value.name = telem_y
       ) |> setDT() |> setkey(time,ind,id)
   
- 
+# Merge the melted data tables
   out_ts <- merge(melt_x, melt_y, all = TRUE)
+
+# Return the merged data table
+  return(out_ts)
   
 }
 
 
-# _____________________________________________________________
-# Imputar NA a tramos en que no hay cambio ----
+### IMPUTE_CONSTANT_SEGMENT_TO_NA IMPUTE NA IN SEGMENTS W/NO CHANGE ###############################
 
 impute_constant_segment_to_NA <-
-  function(serie,                  # (select por colectivo)
-    vari = "vari",                 # measured variable (eg, ene, odo, vel_ecu )
-    range_vari = NULL,             # full range of measured data (eg, 0-52 kwH for energy, 1-100 % for SOC, etc)
-    min_span_vari = 0.01,           # minimum fraction of full range accepted for selection (eg 0.1 * range_vari)
-    min_minutos_silencio = 25) {   # minimun event duration (short events are discarded)
-   
+  function(serie,
+    # (select por colectivo)
+    vari = "vari",
+    # measured variable (eg, ene, odo, vel_ecu )
+    range_vari = NULL,
+    # full range of measured data (eg, 0-52 kwH for energy, 1-100 % for SOC, etc)
+    min_span_vari = 0.01,
+    # minimum fraction of full range accepted for selection (eg 0.1 * range_vari)
+    min_minutos_silencio = 25) {
+    # minimun event duration (short events are discarded)
+    
     setnames(serie, vari, "vari")
     serie <- serie[, .(time, ind, vari)]
     
     # locf impute NAns
-    serie2 <- copy(serie)[, 
-      vari := vari |> na_locf()][,
-      let(
-      vari_roll_mad =
-        frollapply(
-          vari,
-          min_minutos_silencio,
-          mad,
-          align = "center",
-          fill = NA
-        ) ,
-       vari_rm = vari
-      ) ][,
-       vari_roll_mad := vari_roll_mad |> na_replace(fill=0)][
-        vari_roll_mad <= min_span_vari*range_vari, 
-        vari_rm := NA]
-    serie2 <- serie2[, .(time, ind, vari_rm)] |> 
+    min_minutos_silencio = 10
+    serie2 <- copy(serie)[,
+      vari := vari |> na_ma(maxgap = 10)][,
+        let(
+          vari_roll_mad =
+            frollapply(
+              vari,
+              min_minutos_silencio,
+              sd,
+              align = "center",
+              fill = NA
+            ) ,
+          vari_rm = vari
+        )][,
+          vari_roll_mad := vari_roll_mad |> na_replace(fill = min(vari_roll_mad))][
+            #vari_roll_mad <= min_span_vari *range_vari / (2.5*min_minutos_silencio),
+            vari_roll_mad <= 10,
+            vari_rm := NA]
+    serie2 <- serie2[, .(time, ind, vari_rm)] |>
       setnames("vari_rm", vari)
-
-    return(serie2)
-    }
-
-
-# _____________________________________________________________
-# Segmentos continuos de la serie -----
-
-extract_continuous <- 
-  function(serie,                     # (select por colectivo)
-    vari="vari",                      # measured variable (eg, ene, odo, vel_ecu )
-    range_vari,                      
-    min_minutos_gap = 20,             
-    min_minutos_duration = 30,       
-    max_na=0.2,
-    min_span_vari = 0.3,          
-    min_minutos_silencio = 15)   {                 
-  
     
+    return(serie2)
+  }
+
+
+### UNINTERRUPTED SEGMENTS OF THE SERIES ###############################  
+
+extract_continuous <-
+  function(serie,
+    # (select por colectivo)
+    vari = "vari",
+    # measured variable (eg, ene, odo, vel_ecu )
+    range_vari,
+    min_minutos_gap = 20,
+    min_minutos_duration = 30,
+    max_na = 0.2,
+    min_span_vari = 0.3,
+    min_minutos_silencio = 25)   {
     serie |> setnames(vari, "vari")
     serie <- serie[, .(time, ind, vari)]
     
@@ -387,10 +506,11 @@ extract_continuous <-
     serie <-
       impute_constant_segment_to_NA(
         serie = serie,
-        vari="vari",
+        vari = "vari",
         range_vari = range_vari,
         min_span_vari,
-        min_minutos_silencio)
+        min_minutos_silencio
+      )
     
     to_replace <-
       serie[!is.na(vari)] # primeros puntos de cada segmento
@@ -411,38 +531,34 @@ extract_continuous <-
       rbind(to_replace[, .(end = last(time), ind_end = last(ind))]) |> setkey(end, ind_end)
     
     segmentos <-
-      copy(segmentos_ini)[, 
+      copy(segmentos_ini)[,
         c("end", "ind_end") := segmentos_end]
     segmentos <-
-      segmentos[!(ind_start == ind_end)][
-        end - start > duration(min_minutos_duration, "mins")] |> 
+      segmentos[!(ind_start == ind_end)][end - start > duration(min_minutos_duration, "mins")] |>
       setkey(start, end)
     
     
     for (k in segmentos[, .I]) {
-      
       intervalo_k <-  c(segmentos[k, start], segmentos[k, end])
-      serie_k <- serie[time %between% intervalo_k] 
+      serie_k <- serie[time %between% intervalo_k]
       # print(paste0( " ", k))
       
       segmentos[k,
-        let(
-        mad_k =
-          serie_k[!is.na(vari)][, 
-            as.double(mad(vari)) ],
+        let(mad_k =
+            serie_k[!is.na(vari)][,
+              as.double(mad(vari))],
           na_frac =
             serie_k[,
-           sum(is.na(vari)) / .N ],
+              sum(is.na(vari)) / .N],
           range_k =
-            serie_k[!is.na(vari)][, 
-            as.double(diff(range(vari)))] 
-        )]
+            serie_k[!is.na(vari)][,
+              as.double(diff(range(vari)))])]
       
-      }
+    }
     
     # segmentos <- segmentos[mad_k> as.double(min_span_vari*range_vari) &
     #     range_k > as.double(min_span_vari*range_vari)]
-    # 
+    #
     serie |> setnames("vari", vari)
     
     return(list(serie = serie,
@@ -451,7 +567,7 @@ extract_continuous <-
 
 
 # _____________________________________________________________
-# Periodos carga y descarga (loess smoothing) ----
+# SPLIT CHARGE AND DISCHARGE PERIODS (WITH LOESS SMOOTHING) ----
 
 extrae_carga_descarga <-
   function(serie_segmentos,
@@ -561,41 +677,36 @@ plot_segment <- function(dt_cast, dt_segments) {
 ## Generate table of charging/discharging curves aligned to given SOC of kWh values ----
 #  IN PROGRESS
 
-charge_aligned <- function(dt_cast,dt_segments,center=0.5)
-  intervalos <-  dt_segments[, .(id, start, end)]
-  vari <- dt_segments[, id] |> unique()
-  dt_melt <- dt_cast[, cbind(.SD), .SDcols = c("time", vari)] |>
-    melt(measure.vars = vari, variable.name = "id") |>
-    setDT()   
+# charge_aligned <- function(dt_cast,dt_segments,center=0.5)
+#   intervalos <-  dt_segments[, .(id, start, end)]
+#   vari <- dt_segments[, id] |> unique()
+#   dt_melt <- dt_cast[, cbind(.SD), .SDcols = c("time", vari)] |>
+#     melt(measure.vars = vari, variable.name = "id") |>
+#     setDT()   
   
-  #####  IN PROGRESS #####
+#########  IN PROGRESS #####
   
 # _____________________________________________________
-## Reindex by odometer ----
+###### Reindex by odometer ----
 # Index series by distance covered instead of time 
 #####  IN PROGRESS #####
 
-invert_var <- function(series,vari,spanvari){   # spanvari is a vector of points to interpolate 
+# invert_var <- 
+# function(series,vari,spanvari){ # spanvari is a vector of points to interpolate 
+# }
+#   
+# # _____________________________________________________
+#####  Loess Derivative ----
+#   #library(DAMisc)
+#   
+#   y_smoothed_obj <-
+#     loess(vari ~ j,
+#       data = series,
+#       span = 0.005)
+#   y_smoothed <-
+#     predict(y_smoothed_obj)
+#   
+#   
   
   
-  
-  
-  
-  
-}
-  
-# _____________________________________________________
-## Loess Derivative ----
-  #library(DAMisc)
-  
-  y_smoothed_obj <-
-    loess(vari ~ j,
-      data = series,
-      span = 0.005)
-  y_smoothed <-
-    predict(y_smoothed_obj)
-  
-  
-  
-  
-  #####  IN PROGRESS #####
+#####  IN PROGRESS #####

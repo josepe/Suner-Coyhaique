@@ -1,203 +1,224 @@
+# # periodo:            
+#      vector of dates specifying the time period for which the data should be fetched.
+# # autos_coyhaique:    
+#      vector of vehicle IDs for the taxis in Coyhaique.
+# # querystr_ev500_2:     
+#      string containing the InfluxDB query for fetching data for the taxis in Coyhaique.
+# # con:                
+#      connection to the InfluxDB database.
+# # fetch_telemetry:   
+#      function that fetches telemetry data from InfluxDB.
+# # detect_peaks:      
+#      function that detects peaks in a time series.
+# # cast_ts:            
+#      function that converts a time series to a data frame with interpolated values.
+# # join_cast_ts:       
+#      function that joins two cast time series data frames.
+# # extract_continuous: 
+#      function that extracts continuous segments from a time series.
+# # extrae_carga_descarga: 
+#      function that extracts charge-discharge segments from a time series.
+# # odo: 
+#      data frame containing the odometer data for the taxis in Coyhaique.
+# # ene: 
+#      data frame containing the energy data for the taxis in Coyhaique.
+# # soc:
+#      data frame containing the state of charge data for the taxis in Coyhaique.
+# # vel_ecu: 
+#      data frame containing the speed data from the ECU for the taxis in Coyhaique.
+# # gps: 
+#      data frame containing the GPS data for the taxis in Coyhaique.
+# # tbase:
+#      data frame containing a base time series with one minute resolution for the time period specified in periodo.
+# # odo_ts: 
+#      cast time series data frame containing the odometer data for the taxis in Coyhaique.
+# # ene_ts: 
+#      cast time series data frame containing the energy data for the taxis in Coyhaique.
+# # soc_ts: 
+#      cast time series data frame containing the state of charge data for the taxis in Coyhaique.
+# # vel_ecu_ts: 
+#      cast time series data frame containing the speed data from the ECU for the taxis in Coyhaique.
+# # gps_ts: 
+#      cast time series data frame containing the GPS data for the taxis in Coyhaique.
+# # soc_ene: 
+#      joined data frame containing the odometer, energy, and state of charge data for the taxis in Coyhaique.
+# # odo_ene: 
+#      joined data frame containing the odometer and energy data for the taxis in Coyhaique.
+# # odo_alt: 
+#      joined data frame containing the odometer and GPS data for the taxis in Coyhaique.
+# # dt_segments_ene: 
+#      data frame containing the charge-discharge segments for the taxis in Coyhaique.
+# # betw:
+#      data frame containing the start and end times of the charge-discharge segments for the taxis in Coyhaique.
+# # ggtopl:
+#      ggplot object containing a plot of the charge-discharge segments for the taxis in Coyhaique.
+# # odo_day:
+#      data frame containing the daily odometer readings for the taxis in Coyhaique.
+# # odo_hour: 
+#      data frame containing the hourly odometer readings for the taxis in Coyhaique.
+# # odo_hour2: 
+#      data frame containing the hourly odometer readings for the taxis in Coyhaique with the odometer readings aggregated by hour of the day.
+# # soctr: 
+#      data frame containing the smoothed odometer readings for the taxis in Coyhaique.
+# # stest: 
+#      data frame containing a subset of the smoothed odometer readings for the taxis in Coyhaique.
+# # soct: 
+#      data frame containing the smoothed odometer and state of charge readings for the taxis in Coyhaique.
+# # odo_ene_ts:
+#      time series data frame containing the odometer and energy readings for the taxis in Coyhaique.
+
+
 ########################################################################
-# FETCH (series de tiempo) ----
 
-# ____________________________________________________________
-### Odometro ----
-
-odo <-
-  fetch_telemetry(
-    con = con,
-    vehiculo = autos_coyhaique,
-    querystr = querystr_ev500,
-    var_telemetria="odo",
-    time_zone = "America/Santiago"
-  )
-odo[odo < 50000]
-odo <- odo[time %within% periodo]
-filename_odo <- str_c("../datos_colectivos/colectivos_odo_",periodo |> as.character(),".csv")
-fwrite(odo,filename_odo )
+# BASE TIME ----
+tbase <- create_timebase(periodo=periodo,time_unit = time_res ,time_zone = "America/Santiago" ) # time_res defined in config_report_coyhaique.R
 
 
-# ____________________________________________________________
-### Energia ----
+####  TELEMETRY VARIABLES FROM csv FILES *** IN LOCAL DIRECTORY *** ####
+files <- c(
+  "vel_ecu.csv",
+  "odo.csv",
+  "gps.csv",
+  "ene.csv",
+  "soc.csv") 
 
-ene <-
-  fetch_telemetry(
-    con = con,
-    vehiculo = autos_coyhaique,
-    querystr = querystr_ev500,
-    var_telemetria="ene",
-    time_zone = "America/Santiago"
-  )
+#### READ FILES TO VARIABLES ON A LIST ####
+list_of_dfs <- lapply(files,\(x) read_and_convert_time(x,tbase=tbase))
 
-scale1 <- 1 / 64
-rem1 <- 200 #(referencia batería en cero)
 
-ene <- ene[ene < 20000][, 
-  ene := ene * scale1 - rem1][ ##OJO, formula arroja valores > 52 (id=coy en agosto) chequear versus SOC escalado a 52
-    ene>0]
-ene <- ene[time %within% periodo]
-filename_ene <- str_c("../datos_colectivos/colectivos_ene_",periodo |> as.character(),".csv")
-fwrite(ene,filename_ene)
+#### Assign each data.frame to a variable in the global environment ####
 
-# ____________________________________________________________
-### SOC ----
+for (i in seq_along(list_of_dfs)) {
+  # Extract the base name of the file (without extension)
+  base_name <- tools::file_path_sans_ext(basename(files[i]))
+  # Assign the data.frame to a variable with the base name
+  assign(base_name, list_of_dfs[[i]])
+}
 
-soc <-
-  fetch_telemetry(
-    con = con,
-    vehiculo = autos_coyhaique,
-    querystr = querystr_ev500,
-    var_telemetria="soc",
-    time_zone = "America/Santiago"
-  )
-soc <- soc[time %within% periodo]
-soc <- soc[soc>0]
-filename_soc <- str_c("../datos_colectivos/colectivos_soc_",periodo |> as.character(),".csv")
-fwrite(soc,filename_soc)
+rm(list_of_dfs)
 
-# ____________________________________________________________
-### VEL_ECU ----
-
-vel_ecu <-
-  fetch_telemetry(
-    con = con,
-    vehiculo = autos_coyhaique,
-    querystr = querystr_ev500,
-    var_telemetria="vel_ecu",
-    time_zone = "America/Santiago"
-  )
-vel_ecu <- vel_ecu[time %within% periodo]
-filename_vel_ecu <- str_c("../datos_colectivos/colectivos_vel_ecu_",periodo |> as.character(),".csv")
-fwrite(vel_ecu,filename_vel_ecu)
-
-# ____________________________________________________________
-### GPS ----
-
-gps <-
-  fetch_telemetry(
-    con = con,
-    vehiculo = autos_coyhaique,
-    querystr = querystr_ev500,
-    var_telemetria="gps",
-    time_zone = "America/Santiago"
-  )
-
-gps |> setnames(2, "time")
-gps |> setnames(3, "lat")
-gps <- gps[time %within% periodo]
-filename_gps <- str_c("../datos_colectivos/colectivos_gps_",periodo |> as.character(),".csv")
-fwrite(gps,filename_gps)
-
-# ____________________________________________________________
-### F Regenerativo ----
-
-regenera <-
-  fetch_telemetry(
-    con = con,
-    vehiculo = autos_coyhaique,
-    querystr = querystr_ev500,
-    var_telemetria="regenera",
-    time_zone = "America/Santiago"
-  )
-filename_regenera <- str_c("../datos_colectivos/colectivos_regenera_",periodo |> as.character(),".csv")
-fwrite(regenera,filename_regenera)
-
-# _________________________________________________________
-# Series de tiempo  
-
-# Tiempo base ----
-tbase <- seq(int_start(periodo),int_end(periodo),by= "1 min") |> as.data.table() |> setnames(1,"time") 
-tbase[,ind:=.I]
-tbase[,time := round_date(time, unit = "1 min")] |> setkey(time)
 
 # Odometro base ----
 #### CONTINUAR !! ####
 
 # Distancia recorrida base, en km ----
-odo_ts <- odo_ts[odo<70000]
-sbase <- seq(min(odo_ts$odo),max(odo_ts$odo)*1.1,by=0.5) |>
-  as.data.table() |> 
-  setnames(1,"odo") 
-odo_s <- copy(odo_ts)[,odo:=round(2*odo)/2]
+odo_ts <- odo_ts[odo < max_odo] # max_odo defined in config_report file
+sbase <- seq(min(odo_ts$odo), max(odo_ts$odo) * 1.1, by = 0.5) |>
+  as.data.table() |>
+  setnames(1, "odo")
+odo_s <- copy(odo_ts)[, odo := round(2 * odo) / 2]
 
 ### Energy ----
-ene[,time := round_date(time, unit = "1 min")]
-ene <- ene[ene>0][,.(ene=mean(ene)),by=.(time,id)] |> setkey(time,id)
-ene_ts <- ene[tbase,on=.(time),nomatch=NA]
+ene[, time := round_date(time, unit = "1 min")]
+ene <- ene[ene > 0][, .(ene = mean(ene)), by = .(time, id)] |> setkey(time, id)
+# change the timezone of the time column to "America/Santiago"
+ene[, time := with_tz(time, tzone = "America/Santiago")]
+ene_ts <- ene[tbase, on = .(time), nomatch = NA]
 
 
 ### SOC ----
-soc[,time := round_date(time, unit = "1 min")]
-soc <- soc[soc>0][,.(soc=mean(soc)),by=.(time,id)] |> setkey(time,id)
-soc_ts <- soc[tbase,on=.(time),nomatch=NA]  
+soc[, time := round_date(time, unit = "1 min")]
+soc <- soc[soc > 0][, .(soc = mean(soc)), by = .(time, id)] |> setkey(time, id)
+# change the timezone of the time column to "America/Santiago"
+soc[, time := with_tz(time, tzone = "America/Santiago")]
+soc_ts <- soc[tbase, on = .(time), nomatch = NA]
 
 
 ### Vel_ecu ----
-vel_ecu[,time := round_date(time, unit = "1 min")]
-vel_ecu <- vel_ecu[vel_ecu >= 0][vel_ecu<160][,.(vel_ecu=mean(vel_ecu)),by=.(time,id)] |> setkey(time,id)
-vel_ecu_ts <- vel_ecu[tbase,on=.(time),nomatch=NA]
+vel_ecu |> setcolorder(c("time","id","vel_ecu"))
+vel_ecu[, time := round_date(time, unit = "1 min")]
+vel_ecu <- vel_ecu[vel_ecu >= 0][vel_ecu < 160][, .(vel_ecu = mean(vel_ecu)), by = .(time, id)] |> setkey(time, id)
+# change the timezone of the time column to "America/Santiago"
+vel_ecu[, time := with_tz(time, tzone = "America/Santiago")]
+vel_ecu_ts <- vel_ecu[tbase, on = .(time), nomatch = NA]
 
 
 ### Odometer ----
-odo[,time := round_date(time, unit = "1 min")]
-odo <- odo[odo>0][odo<max(odo)][,.(odo=mean(odo)),by=.(time,id)] |> setkey(time,id)
-odo_ts <- odo[tbase,on=.(time),nomatch=NA]
+odo[, time := round_date(time, unit = "1 min")]
+odo <- odo[odo > 0][odo < max(odo)][, .(odo = mean(odo)), by = .(time, id)] |> setkey(time, id)
+# change the timezone of the time column to "America/Santiago"
+odo[, time := with_tz(time, tzone = "America/Santiago")]
+odo_ts <- odo[tbase, on = .(time), nomatch = NA]
 
 
 ### GPS ----
-gps[,time := round_date(time, unit = "1 min")]
-gps <- gps[,lapply(.SD,mean),.SDcols=c("a","lat","lon", "vel"), by=.(time,id)] |> setkey(time,id)
-gps_ts <- gps[tbase,on=.(time),nomatch=NA]
+gps[, time := round_date(time, unit = "1 min")]
+gps <- gps[, lapply(.SD, mean), .SDcols = c("a", "lat", "lon", "vel"), by = .(time, id)] |> setkey(time, id)
+# change the timezone of the time column to "America/Santiago"
+gps[, time := with_tz(time, tzone = "America/Santiago")]
+gps_ts <- gps[tbase, on = .(time), nomatch = NA]
 
 
-#_______________________________________________________
+# _______________________________________________________
 ### JOINs ----
 
-soc_ene <-        merge(soc_ts,ene_ts,all=TRUE,by=c("time","id","ind"))
-soc_ene_samp <-   soc_ene[sample(.N,50000)]
-odo_ene <-        merge(odo,ene,all=TRUE,by=c("time","id","ind"))
-odo_alt <-        merge(odo,gps,all=TRUE,by=c("time","id","ind")) |> na.omit()
-# odo_alt_samp <- odo_alt[odo>500 & odo<30000][a<500 & a>200][seq(1,.N,10)]
+soc_ene <- merge(soc_ts, ene_ts, all = TRUE, by = c("time", "id", "ind"))
+soc_ene_samp <- soc_ene[sample(.N, 50000)]
+odo_ene <- merge(odo_ts, ene_ts, all = TRUE, by = c("time", "id", "ind"))
+odo_alt <- merge(odo_ts, gps_ts, all = TRUE, by = c("time", "id", "ind")) |> na.omit()
+odo_alt_samp <- odo_alt[odo>500 & odo<30000][a<500 & a>200][seq(1,.N,10)]
 
 ## Impute NAs -----
 
-cast_ene_ts <-     cast_ts(ene_ts, "ene", gap_min = 10)
-cast_soc_ts <-     cast_ts(soc_ts, "soc", gap_min = 10)
-cast_odo_ts <-     cast_ts(odo_ts, "odo", gap_min = 10)
+cast_ene_ts <- cast_ts(ene_ts, "ene", gap_min = 10)
+cast_soc_ts <- cast_ts(soc_ts, "soc", gap_min = 10)
+cast_odo_ts <- cast_ts(odo_ts, "odo", gap_min = 10)
 cast_vel_ecu_ts <- cast_ts(vel_ecu_ts, "vel_ecu", gap_min = 10)
 
 
-ene_odo <- join_cast_ts(cast_ene_ts, cast_odo_ts, telem=c("ene","odo"))
-soc_odo <- join_cast_ts(cast_ene_ts, cast_odo_ts, telem=c("soc","odo"))
-alt_odo <- join_cast_ts(cast_ene_ts, cast_odo_ts, telem=c("soc","odo"))
+ene_odo <- join_cast_ts(cast_ene_ts, cast_odo_ts, telem = c("ene", "odo"))
+soc_odo <- join_cast_ts(cast_ene_ts, cast_odo_ts, telem = c("soc", "odo"))
+alt_odo <- join_cast_ts(cast_ene_ts, cast_gps_ts, telem = c("gps", "odo"))
 
 
 
 # _______________________________________________________
-# Extraer segmentos Energía ----  
+# Extraer segmentos Energía ----
 # Para segmentar periodos de carga-descarga es mejor usar la señal SOC
-# señal odo para segmentar periodos detenido y movimiento 
+# señal odo para segmentar periodos detenido y movimiento
 
 
-  source("config_report_coyhaique.R")
+source("config_report_coyhaique.R")
 
-    
-    segments_ene <- list()
-    for ( vari in autos_coyhaique |> names() )  {
-      
-    segments_ene[[vari]] <-
-      copy(cast_ene_ts) |>
-      extract_continuous(
+
+segments_soc <- list()
+for (vari in autos_coyhaique |> names()) {
+  print(vari)
+  f1 <- 
+    copy(cast_soc_ts) |>
+    extract_continuous(
+      vari = vari,
+      range_vari = range_vari, # this would be 100 for SOC, 52 for energy, etc.
+    )
+     f2  <- f1 |>  
+      extrae_carga_descarga(
         vari = vari,
         range_vari = range_vari,
-        min_span_vari = min_span_vari,
-        min_minutos_gap = min_minutos_gap,
-        min_minutos_duration = min_minutos_duration,
-        max_na = max_na,
-        min_minutos_silencio = min_minutos_silencio
-      ) |>
-      extrae_carga_descarga(
+        max_x_no_change = max_x_no_change,
+        min_y_no_change = min_y_no_change,
+        FUN = detect_peaks_score,
+        npoints = npoints,
+        w = w,
+        w_detect = w_detect,
+        w_score = w_score,
+        score_thres = score_thres
+      )
+     segments_soc[[vari]] <- f2
+  }
+
+dt_segments_soc <- rbindlist(segments_soc, idcol = "id") 
+dt_segments_ene <- rbindlist(segments_ene, idcol = "id") 
+
+segments_ene <- list()
+for (vari in autos_coyhaique |> names()) {
+  f1 <- 
+    copy(cast_ene_ts) |>
+    extract_continuous(
+      vari = vari,
+      range_vari = range_vari
+    )
+     segments_ene[[vari]] <-
+      extrae_carga_descarga(f1,
         vari = vari,
         range_vari = range_vari,
         max_x_no_change = max_x_no_change,
@@ -211,70 +232,91 @@ alt_odo <- join_cast_ts(cast_ene_ts, cast_odo_ts, telem=c("soc","odo"))
       )
   }
 
-  dt_segments_ene <- rbindlist(segments_ene,idcol="id")
-  
-    
-# _____________________________________________________________
-  # PLot all segments *series ----
- 
-  betw <- dt_segments_ene[delta=="descarga"][id=="coy2",.(start,end)][sample(.N,30)]
-  
-  betw <- seg_coy2[ind_start %in% c(110166,110308)][,.(start,end)]
 
-  toplot <- cast_ene_ts[,.(time, coy2)][, pin:= time %inrange% betw]
-   
-   ggtopl <-  toplot[pin == TRUE] |>
-      ggplot() +
-      aes(x = time, y = coy2, colour=pin) +
-      geom_point(size = 0.5) +
-      theme_minimal()
+
+# _____________________________________________________________
+# PLot all segments *series ----
+
+betw <-
+  dt_segments_ene[delta == "descarga"][id == "coy2", .(start, end)][sample(.N, 30)]
+
+betw <-
+  seg_coy2[ind_start %in% c(110166, 110308)][, .(start, end)]
+
+toplot <- cast_ene_ts[, .(time, coy2)][, pin := time %inrange% betw]
+
+ggtopl <- toplot[pin == TRUE] |>
+  ggplot() +
+  aes(x = time, y = coy2, colour = pin) +
+  geom_point(size = 0.5) +
+  theme_minimal()
 # plotear SOC vs energia
-   # plotear SOC completo con SOC en energ'ia segmentos
+# plotear SOC completo con SOC en energ'ia segmentos
 
 # _____________________________________________________________
 # Odómetro por dia ----
-odo_day <-  odo[time %within% periodo] [,
-  `:=`(day = date(time), time = NULL)][,
-    rec_diario := max(odo) - min(odo), by = c("id", "day")] |>
+odo_day <- odo[time %within% periodo][
+  ,
+  `:=`(day = date(time), time = NULL)
+][,
+  rec_diario := max(odo) - min(odo),
+  by = c("id", "day")
+] |>
   unique(by = c("id", "day"))
-#rowidv(cols="id",prefix = "del.")
-odo_day[,finde:=
-    fifelse(lubridate::wday(day)<5,
-      "semana",
-      "finde")] 
+# rowidv(cols="id",prefix = "del.")
+odo_day[, finde :=
+  fifelse(
+    lubridate::wday(day) < 5,
+    "semana",
+    "finde"
+  )]
 
-odo_hour <- odo[time %within% periodo][, 
-  `:=`(day = date(time),
+odo_hour <- odo[time %within% periodo][
+  ,
+  `:=`(
+    day = date(time),
     hora = hour(time),
-    time = NULL)][lubridate::wday(day)<5][, 
-      rec_horario := max(odo) - min(odo), by = c("id", "day","hora")][,
-        rec_hora:=sum(rec_horario),by=c("id","hora")][,c("odo","day","rec_horario"):=NULL] |> 
+    time = NULL
+  )
+][lubridate::wday(day) < 5][,
+  rec_horario := max(odo) - min(odo),
+  by = c("id", "day", "hora")
+][,
+  rec_hora := sum(rec_horario),
+  by = c("id", "hora")
+][, c("odo", "day", "rec_horario") := NULL] |>
   unique(by = c("id", "hora"))
 
-odo_hour2 <- odo[time %within% periodo][, 
-  `:=`(day = date(time),
+odo_hour2 <- odo[time %within% periodo][
+  ,
+  `:=`(
+    day = date(time),
     hora = as.factor(hour(time)),
-    time = NULL)][lubridate::wday(day)<5][, 
-      rec_horario := max(odo) - min(odo), by = c("id", "day","hora")][,c("odo"):=NULL] |> 
+    time = NULL
+  )
+][lubridate::wday(day) < 5][,
+  rec_horario := max(odo) - min(odo),
+  by = c("id", "day", "hora")
+][, c("odo") := NULL] |>
   unique()
 
 
 # _____________________________________________________________
 # Tests ----
-soctr <- soc[tbase,roll=-1,on="time"]
-soctr[,socm:=mean(soc), by=.(id,time)]
+soctr <- soc[tbase, roll = -1, on = "time"]
+soctr[, socm := mean(soc), by = .(id, time)]
 soctr <- soctr |> unique()
-soctr <- tbase[soc,on="time",nomatch=NULL,.(i.soc)]
-stest <- soc[time>"2022-06-07 10:16:00"& time<"2022-06-10 15:16:00"][sample(.N,20)]
-soct <- stest[tbtest,roll=-1,on=.(time=time_ind)]
-soct[,socm:=mean(soc), by=.(id,time)]
+soctr <- tbase[soc, on = "time", nomatch = NULL, .(i.soc)]
+stest <- soc[time > "2022-06-07 10:16:00" & time < "2022-06-10 15:16:00"][sample(.N, 20)]
+soct <- stest[tbtest, roll = -1, on = .(time = time_ind)]
+soct[, socm := mean(soc), by = .(id, time)]
 soct <- soct |> unique()
-soct <- tbtest[stest,on=.(time),nomatch=NULL]
-soct[time=="2022-07-08 13:56:00"]
-soct[ttime=="2022-07-08 15:43:00"]
+soct <- tbtest[stest, on = .(time), nomatch = NULL]
+soct[time == "2022-07-08 13:56:00"]
+soct[ttime == "2022-07-08 15:43:00"]
 
 
 # _____________________________________________________________
 ### Análisis carga descarga ----
 
-# odo_ene_ts <- 
+# odo_ene_ts <-

@@ -9,10 +9,10 @@ library(readr)
 library(purrr)
 library(e1071)     # skewness , kurtosis
 
-library(formatR)
-library(gt)
+library(formatR)        # provides a variety of functions for formatting and styling text, tables, and other output in R. 
+library(gt)             # a tidy way to generate publication-quality tables.
 library(DataExplorer)
-library(tidyquant)
+#library(tidyquant)
 library(dataCompareR)   # https://github.com/capitalone/dataCompareR/blob/master/README.md
 library(httr)           # https://cran.r-project.org/web/packages/httr/vignettes/quickstart.html
 

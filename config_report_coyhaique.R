@@ -1,8 +1,20 @@
+## Periodo a analizar ----
+
+inicio <-  as_datetime("2022-03-14 21:00:00 -03",tz="America/Santiago")
+fin <-     as_datetime("2023-04-29 20:00:00 -04",tz="America/Santiago")
+
+periodo <- interval(start=inicio,end=fin)
+
+# Temporal resolution resamplig ----
+time_res = "1 min"
+
+# Maximum odometer allowed (to exclude artifacts)
+max_odo = 70000
 # _______________________________________________________
-# Extraer segmentos Energía ----  
+# Para extraer segmentos Energía ----  
 
 
-#  extract_continuous ----
+#  ,extract_continuous ----
   
     min_minutos_gap =       20
     min_minutos_duration =  30       # minimum time between events (gaps less than this duration are considered a single event)
@@ -30,7 +42,6 @@
     score_thres =            0.5     # for score detection function detect_d
     
  
-################################################################################################################################
 ################################################################################################################################
        
 # Extraer segmentos SOC ----  
@@ -64,3 +75,4 @@
     score_thres =            0.5     # for score detection function detect_d
     
  
+    
