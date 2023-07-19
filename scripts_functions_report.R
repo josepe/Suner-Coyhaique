@@ -83,7 +83,7 @@ files <- c(
   "soc.csv") 
 
 #### READ FILES TO VARIABLES ON A LIST ####
-list_of_dfs <- lapply(files,\(x) read_and_convert_time(x,tbase=tbase))
+list_of_dfs <- lapply(files,\(x) read_and_convert_time(x,time_unit = time_res))
 
 
 #### Assign each data.frame to a variable in the global environment ####
@@ -109,44 +109,29 @@ sbase <- seq(min(odo_ts$odo), max(odo_ts$odo) * 1.1, by = 0.5) |>
 odo_s <- copy(odo_ts)[, odo := round(2 * odo) / 2]
 
 ### Energy ----
-ene[, time := round_date(time, unit = "1 min")]
 ene <- ene[ene > 0][, .(ene = mean(ene)), by = .(time, id)] |> setkey(time, id)
-# change the timezone of the time column to "America/Santiago"
-ene[, time := with_tz(time, tzone = "America/Santiago")]
-ene_ts <- ene[tbase, on = .(time), nomatch = NA]
+ene <- ene[tbase, on = .(time), nomatch = NA]
 
 
 ### SOC ----
-soc[, time := round_date(time, unit = "1 min")]
 soc <- soc[soc > 0][, .(soc = mean(soc)), by = .(time, id)] |> setkey(time, id)
-# change the timezone of the time column to "America/Santiago"
-soc[, time := with_tz(time, tzone = "America/Santiago")]
-soc_ts <- soc[tbase, on = .(time), nomatch = NA]
+soc <- soc[tbase, on = .(time), nomatch = NA]
 
 
 ### Vel_ecu ----
 vel_ecu |> setcolorder(c("time","id","vel_ecu"))
-vel_ecu[, time := round_date(time, unit = "1 min")]
 vel_ecu <- vel_ecu[vel_ecu >= 0][vel_ecu < 160][, .(vel_ecu = mean(vel_ecu)), by = .(time, id)] |> setkey(time, id)
-# change the timezone of the time column to "America/Santiago"
-vel_ecu[, time := with_tz(time, tzone = "America/Santiago")]
-vel_ecu_ts <- vel_ecu[tbase, on = .(time), nomatch = NA]
+vel_ecu <- vel_ecu[tbase, on = .(time), nomatch = NA]
 
 
 ### Odometer ----
-odo[, time := round_date(time, unit = "1 min")]
-odo <- odo[odo > 0][odo < max(odo)][, .(odo = mean(odo)), by = .(time, id)] |> setkey(time, id)
-# change the timezone of the time column to "America/Santiago"
-odo[, time := with_tz(time, tzone = "America/Santiago")]
-odo_ts <- odo[tbase, on = .(time), nomatch = NA]
+odo <- odo[odo > 0][odo < max(odo)][, .(odo = min(odo)), by = .(time, id)] |> setkey(time, id)
+odo <- odo[tbase, on = .(time), nomatch = NA]
 
 
 ### GPS ----
-gps[, time := round_date(time, unit = "1 min")]
 gps <- gps[, lapply(.SD, mean), .SDcols = c("a", "lat", "lon", "vel"), by = .(time, id)] |> setkey(time, id)
-# change the timezone of the time column to "America/Santiago"
-gps[, time := with_tz(time, tzone = "America/Santiago")]
-gps_ts <- gps[tbase, on = .(time), nomatch = NA]
+gps <- gps[tbase, on = .(time), nomatch = NA]
 
 
 # _______________________________________________________
@@ -160,32 +145,27 @@ odo_alt_samp <- odo_alt[odo>500 & odo<30000][a<500 & a>200][seq(1,.N,10)]
 
 ## Impute NAs -----
 
-cast_ene_ts <- cast_ts(ene_ts, "ene", gap_min = 10)
-cast_soc_ts <- cast_ts(soc_ts, "soc", gap_min = 10)
-cast_odo_ts <- cast_ts(odo_ts, "odo", gap_min = 10)
-cast_vel_ecu_ts <- cast_ts(vel_ecu_ts, "vel_ecu", gap_min = 10)
+cast_ene     <- cast_ts(ene, "ene", gap_min = 10)
+cast_soc     <- cast_ts(soc, "soc", gap_min = 10)
+cast_odo     <- cast_ts(odo, "odo", gap_min = 10)
+cast_vel_ecu <- cast_ts(vel_ecu, "vel_ecu", gap_min = 10)
 
-
-ene_odo <- join_cast_ts(cast_ene_ts, cast_odo_ts, telem = c("ene", "odo"))
-soc_odo <- join_cast_ts(cast_ene_ts, cast_odo_ts, telem = c("soc", "odo"))
-alt_odo <- join_cast_ts(cast_ene_ts, cast_gps_ts, telem = c("gps", "odo"))
-
-
+ene_odo      <- join_cast_ts(cast_ene, cast_odo, telem = c("ene", "odo"))
+soc_odo      <- join_cast_ts(cast_ene, cast_odo, telem = c("soc", "odo"))
+alt_odo      <- join_cast_ts(cast_ene, cast_gps, telem = c("gps", "odo"))
 
 # _______________________________________________________
 # Extraer segmentos Energía ----
 # Para segmentar periodos de carga-descarga es mejor usar la señal SOC
 # señal odo para segmentar periodos detenido y movimiento
 
-
 source("config_report_coyhaique.R")
-
 
 segments_soc <- list()
 for (vari in autos_coyhaique |> names()) {
   print(vari)
   f1 <- 
-    copy(cast_soc_ts) |>
+    copy(cast_soc) |>
     extract_continuous(
       vari = vari,
       range_vari = range_vari, # this would be 100 for SOC, 52 for energy, etc.

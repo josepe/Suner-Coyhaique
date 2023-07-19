@@ -92,13 +92,13 @@ fetch_telemetry <- function(con,
 # 
 # Arguments:
 # file: The path to the CSV file to be read.
-# tbase: An optional base data.table that has a 'time' column. If provided, the function will round the time points in the input data.table to the minimum time difference in 'tbase', and then perform a left join with 'tbase' based on the 'time' column.
 # timezone: The timezone to convert the 'time' column to. Default is "America/Santiago".
+# time_unit: defaults to time_res 
 # 
 # Returns:
 # The resulting data.table after timezone conversion, and optional time rounding and merging with 'tbase'.
 
-read_and_convert_time <- function(file, tbase = NULL, timezone = "America/Santiago") {
+read_and_convert_time <- function(file, timezone = "America/Santiago",time_unit=time_res) {
   
   # Read the file into a data.table
   df <- fread(file)
@@ -106,19 +106,10 @@ read_and_convert_time <- function(file, tbase = NULL, timezone = "America/Santia
   # Convert the time column to the specified timezone
   df[, time := with_tz(time, tzone = timezone)]
   
-  # If 'tbase' is provided...
-  if (!is.null(tbase)) {
-    # Calculate the minimum time difference in 'tbase'
-    diff_unit <- get_min_time_difference(tbase)
-    
-    # Round the time points in the input data.table to the nearest time unit
-    df[, time := round_date(time, unit = diff_unit)]
-    
-    # Perform a left join with 'tbase' based on the 'time' column
-    df <- df[tbase, on = .(time), nomatch = NA]
-  }
+  # Round the time points in the input data.table to the nearest time unit
+  df[, time := round_date(time, unit = time_unit)]
   
-  # Return the resulting data.table
+   # Return the resulting data.table
   return(df)
 }
 

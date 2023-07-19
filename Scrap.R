@@ -6,8 +6,8 @@ files <- c(
   "ene.csv",
   "soc.csv")
 
-tbase <- create_timebase(periodo=periodo)
-list_of_dfs <- lapply(files,\(x) read_and_convert_time(x,tbase=tbase))
+tbase <- create_timebase(periodo=periodo,time_unit = time_res)
+list_of_dfs <- lapply(files,\(x) read_and_convert_time(x))
 
 # Assign each data.frame to a variable in the global environment
 for (i in seq_along(list_of_dfs)) {
@@ -18,10 +18,7 @@ for (i in seq_along(list_of_dfs)) {
 }
 
 rm(list_of_dfs)
-
-
-
-
+### Read individual files ----
 soc <- fread("soc.csv")
 soc[, time := with_tz(time, tzone = "America/Santiago")]
 soc_ts <- soc[tbase, on = .(time), nomatch = NA]
@@ -29,8 +26,6 @@ soc_ts <- soc[tbase, on = .(time), nomatch = NA]
 vel_ecu <- fread("vel_ecu.csv")
 vel_ecu[, time := with_tz(time, tzone = "America/Santiago")]
 vel_ecu_ts <- vel_ecu[tbase, on = .(time), nomatch = NA]
-
-
 
 odo <- fread("odo.csv")
 
@@ -40,7 +35,7 @@ vel_ecu <- fread("vel_ecu.csv")
 vel_ecu[, time := with_tz(time, tzone = "America/Santiago")]
 vel_ecu_ts <- vel_ecu[tbase, on = .(time), nomatch = NA]
 
-
+## Write individual files -----
 odo[1,time]
 ene[1,time]
 odo[.N,time]
@@ -53,9 +48,6 @@ fwrite(vel_ecu_ts,"vel_ecuts.csv")
 tbase |>  head()
 odo <- fread("odo.csv")
 odo |> is.data.table()
-
-
-
 
 # Plots y tablas ----
 ggodoy <-  odo[time %within% periodo] [,
@@ -220,16 +212,36 @@ psoc <- soc[id=="coy4",.(time,vari=soc)][month(time)==1 & day(time) %in% c(8,9)]
 psocts <- soc_ts[id=="coy4",.(time,vari=soc)][month(time)==1 & day(time) %in% c(8,9)][,toplot:="psocts"]
 toplot <- rbind(p,psoc,psocts) |> setkey(time)
 
-p <- copy(x_ts)[id=="coy4"][,ind:=NULL][month(time)==1 & day(time) %in% c(8,9)]
+
+# Tests de consistencia de datos ----
+p <- copy(x_ts)[id=="coy4"][,ind:=NULL][month(time)==1 & day(time) %between% c(8,9)]
 q <- cast_soc_ts[,.(time,vari=coy4)][month(time)==1 & day(time) %in% c(8,9)]
-r <- serie[,.(time,vari)][month(time)==1 & day(time) %in% c(5,9)]
-s <- serie2[,.(time,vari,vari_rm,vari_roll_mad)][month(time)==1 & day(time) %in% c(5,9)]
-toplot <- s
+r <- serie[,.(time,vari)][month(time)==1 & day(time) %within% c(5,9)]
+s <- copy(serie)[,.(time,vari,vari_rm,vari_roll_mad)][month(time)==1 & day(time) %in% c(5,9)]
 
-
-qplot(time,vari,data=r,size=I(0.1), colour=I("black") ) |> ggplotly()
+# Froll, remoción de segmentos constantes 
+ p <- copy(serie)[month(time)==10 & day(time) %between% c(5,20)]
+ p[,
+   vari := vari |> na_interpolation(maxgap = 30)][,
+        let(
+          vari_roll_mad =
+            frollapply(
+              vari,
+              min_minutos_silencio,
+              sd,
+              align = "center",
+              fill = NA
+            ) ,
+          vari_rm = vari
+        )][,
+          vari_roll_mad := vari_roll_mad |> na_replace(fill = min(vari_roll_mad))][
+            #vari_roll_mad <= min_span_vari *range_vari / (2.5*min_minutos_silencio),
+            vari_roll_mad <= 10,
+            vari_rm := NA]
+  
+## Plots de froll ----
+qplot(time,vari,data=p,size=I(0.1), colour=I("black") ) |> ggplotly()
 qplot(time,vari,data=s[ vari_roll_mad <= .2],size=I(0.5), colour=I("red") ) |> ggplotly()
-
 
 toplotp <- cx_ts[,.(time,vari=coy4)][month(time)==1 & day(time) %in% c(8,9)]
 range_vari
@@ -302,11 +314,6 @@ ggplotly(ggplot(t[month(time)==1][day(time)==9], aes(x = time, y = vari_rm)) +
 
 
 
-s <- r[,
-       vari_roll_mad := vari_roll_mad |> na_replace(fill=0)][
-        vari_roll_mad <= min_span_vari*range_vari, 
-        vari_rm := NA]
-    serie2 <- serie2[, .(time, ind, vari_rm)]
 
 
 betw <-
@@ -363,3 +370,4 @@ min_time_difference <- get_min_time_difference(tbase,units = "mins")
 # Print the result
 print(min_time_difference)
 
+odo <- read_and_convert_time("odo.csv",time_unit = time_res))
